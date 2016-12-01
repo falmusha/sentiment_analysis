@@ -141,52 +141,62 @@ def word_2_vecs(sentences):
     return vecs
 
 
-def load_stanford_treebank_dataset():
-    if os.path.isfile(STANFORD_TREEBANK_NPZ):
-        data = np.load(STANFORD_TREEBANK_NPZ)
-        print('loaded stanford treebank dataset from %s' % STANFORD_TREEBANK_NPZ)
-        return data['x'], data['y']
+def load_stanford_treebank_dataset(vec_rep=WORD2VEC):
+    if vec_rep == WORD2VEC:
+        train_npz_path = STANFORD_TREEBANK_TRAIN_W2V_NPZ
+        valid_npz_path = STANFORD_TREEBANK_VALID_W2V_NPZ
+        test_npz_path = STANFORD_TREEBANK_TEST_W2V_NPZ
+    else:
+        train_npz_path = STANFORD_TREEBANK_TRAIN_SKP_NPZ
+        valid_npz_path = STANFORD_TREEBANK_VALID_SKP_NPZ
+        test_npz_path = STANFORD_TREEBANK_TEST_SKP_NPZ
 
-    train = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_TRAIN,
-                                                STANFORD_TREEBANK_TRAIN_NPZ)
-    valid = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_VALID,
-                                                STANFORD_TREEBANK_VALID_NPZ)
-    test = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_TEST,
-                                                STANFORD_TREEBANK_TEST_NPZ)
+    if os.path.isfile(train_npz_path) \
+        and os.path.isfile(valid_npz_path) \
+        and os.path.isfile(test_npz_path):
+
+        train_data = np.load(train_npz_path)
+        valid_data = np.load(valid_npz_path)
+        test_data = np.load(test_npz_path)
+        print('loaded train stanford treebank dataset from %s' % train_npz_path)
+        print('loaded valid stanford treebank dataset from %s' % valid_npz_path)
+        print('loaded test stanford treebank dataset from %s' % test_npz_path)
+        return (train_data['x'], train_data['y']), \
+               (valid_data['x'], valid_data['y']), \
+               (test_data['x'], test_data['y'])
+
+
+    train = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_TRAIN)
+    valid = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_VALID)
+    test = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_TEST)
+
+    if vec_rep == WORD2VEC:
+        train[0] = word_2_vecs(train[0])
+        valid[0] = word_2_vecs(valid[0])
+        test[0] = word_2_vecs(test[0])
+    else:
+        train[0] = skip_thoughts_vecs(train[0])
+        valid[0] = skip_thoughts_vecs(valid[0])
+        test[0] = skip_thoughts_vecs(test[0])
 
     return train, valid, test
 
 
-def load_stanford_treebank_dataset_file(path, npz_path):
-    if os.path.isfile(npz_path):
-        data = np.load(npz_path)
-        print('loaded stanford treebank dataset from %s' % npz_path)
-        return (data['x'], data['y'])
-
-    _init_spacy()
+def load_stanford_treebank_dataset_file(path):
     dataset = pytreebank.import_tree_corpus(path)
 
     labels = list()
-    word_vecs = list()
+    sentences = list()
 
     for tree in dataset:
         for label, sentence in tree.to_labeled_lines():
-            word_vecs.append(nlp(sentence).vector)
+            sentences.append(sentence)
             if label >= 2:
                 labels.append(1) # positive
             else:
                 labels.append(0) # negative
-    n = len(word_vecs)
-    x = np.zeros((n, 300))
-    y = np.zeros(n)
 
-    for i in range(n):
-        x[i] = word_vecs[i]
-        y[i] = labels[i]
-
-    np.savez(npz_path, x=x, y=y)
-
-    return x, y
+    return sentences, np.array(labels)
 
 
 def load_stanford_imdb_dataset_file(path):
