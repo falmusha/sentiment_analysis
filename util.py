@@ -5,6 +5,7 @@ import io
 import numpy as np
 import pytreebank
 
+from multiprocessing import Pool
 from sklearn.model_selection import train_test_split
 
 
@@ -13,6 +14,18 @@ SKIPTHOUGHTS = 'skip-thoughts'
 
 WORD2VEC_DIM = 300
 SKIPTHOUGHTS_DIM = 4800
+
+# ----------------------------------------- #
+#
+#                   PROJ
+#
+# ----------------------------------------- #
+
+W2V_SMALL_NPZ = './pds/small_w2v.npz'
+W2V_ALL_NPZ = './pds/all_w2v.npz'
+
+SKP_SMALL_NPZ = './pds/small_skp.npz'
+SKP_ALL_NPZ = './pds/all_skp.npz'
 
 # ----------------------------------------- #
 #
@@ -123,33 +136,86 @@ def merge_datasets(x1, y1, x2, y2):
     return x, y
 
 
+def to_skip_thoughts_vec(data):
+    vecs = skipthoughts.encode(skip_thoughts_model, data[0], batch_size=512)
+
+    return (vecs, data[1])
+
 def skip_thoughts_vecs(sentences):
     _init_skip_thoughts()
 
     print('---------------- skip_thoughts -------------------')
-    return skipthoughts.encode(skip_thoughts_model, sentences, batch_size=512)
+
+    vecs = skipthoughts.encode(skip_thoughts_model, sentences,
+            batch_size=len(sentences))
+    return vecs
+
+    batch_size = 512
+    data = list() # batches
+    n = len(sentences)
+    for i in xrange(0, n, batch_size):
+        print('i = %d ---> START = %d, END = %d' %(i, i, i+batch_size))
+        data.append((sentences[i:i+batch_size], labels[i:i+batch_size]))
+
+    pool = Pool(20)
+    try:
+        pdata = pool.map(to_skip_thoughts_vec, data)
+        pool.close()
+        pool.join()
+    except (KeyboardInterrupt, SystemExit):
+        pool.close()
+        pool.terminate()
+
+    import pdb; pdb.set_trace()
+
+    vecs = np.zeros((n, SKIPTHOUGHTS_DIM))
+    _labels = np.zeros((n))
+    for i, batch in enumerate(pdata):
+        start = i * batch_size
+        end = start + batch_size
+        print('i = %d ---> START = %d, END = %d' %(i, start, end))
+        vecs[start:end] = batch[0]
+        _labels[start:end] = batch[1]
+
+    return vecs, _labels
 
 
-def word_2_vecs(sentences):
+def to_nlp_word_vec(data):
+    return (nlp(data[0]).vector, data[1])
+
+def word_2_vecs(sentences, labels):
     _init_spacy()
 
     print('---------------- word2vec -------------------')
-    vecs = np.zeros((len(sentences), WORD2VEC_DIM))
-    for idx, s in enumerate(sentences):
-        vecs[idx] = nlp(s).vector
 
-    return vecs
+    data = list()
+    n = len(sentences)
+    for i in range(n):
+        data.append((sentences[i], labels[i]))
+
+    pool = Pool(20)
+
+    try:
+        pdata = pool.map(to_nlp_word_vec, data)
+        pool.close()
+        pool.join()
+    except (KeyboardInterrupt, SystemExit):
+        pool.close()
+        pool.terminate()
+
+    vecs = np.zeros((n, WORD2VEC_DIM))
+    labels = np.zeros((n))
+    for i in range(n):
+        vecs[i] = pdata[i][0]
+        labels[i] = pdata[i][1]
+
+    return vecs, labels
 
 
 def load_stanford_treebank_dataset(vec_rep=WORD2VEC):
-    if vec_rep == WORD2VEC:
-        train_npz_path = STANFORD_TREEBANK_TRAIN_W2V_NPZ
-        valid_npz_path = STANFORD_TREEBANK_VALID_W2V_NPZ
-        test_npz_path = STANFORD_TREEBANK_TEST_W2V_NPZ
-    else:
-        train_npz_path = STANFORD_TREEBANK_TRAIN_SKP_NPZ
-        valid_npz_path = STANFORD_TREEBANK_VALID_SKP_NPZ
-        test_npz_path = STANFORD_TREEBANK_TEST_SKP_NPZ
+    train_npz_path = STANFORD_TREEBANK_TRAIN_W2V_NPZ
+    valid_npz_path = STANFORD_TREEBANK_VALID_W2V_NPZ
+    test_npz_path = STANFORD_TREEBANK_TEST_W2V_NPZ
 
     if os.path.isfile(train_npz_path) \
         and os.path.isfile(valid_npz_path) \
@@ -170,14 +236,17 @@ def load_stanford_treebank_dataset(vec_rep=WORD2VEC):
     valid = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_VALID)
     test = load_stanford_treebank_dataset_file(STANFORD_TREEBANK_TEST)
 
-    if vec_rep == WORD2VEC:
-        train[0] = word_2_vecs(train[0])
-        valid[0] = word_2_vecs(valid[0])
-        test[0] = word_2_vecs(test[0])
-    else:
-        train[0] = skip_thoughts_vecs(train[0])
-        valid[0] = skip_thoughts_vecs(valid[0])
-        test[0] = skip_thoughts_vecs(test[0])
+    train = word_2_vecs(train[0], train[1])
+    valid = word_2_vecs(valid[0], valid[1])
+    test = word_2_vecs(test[0], test[1])
+
+    np.savez(train_npz_path, x=train[0], y=train[1])
+    np.savez(valid_npz_path, x=valid[0], y=valid[1])
+    np.savez(test_npz_path, x=test[0], y=test[1])
+
+    print('saving standford imdb train dataset to %s' % train_npz_path)
+    print('saving standford imdb valid dataset to %s' % valid_npz_path)
+    print('saving standford imdb test dataset to %s' % test_npz_path)
 
     return train, valid, test
 
@@ -250,10 +319,10 @@ def load_stanford_imdb_dataset(vec_rep=WORD2VEC):
             load_stanford_imdb_dataset_file(STANFORD_IMDB_TEST_NEG_DIR)
 
     if vec_rep == WORD2VEC:
-        x_pos_train = word_2_vecs(x_pos_train)
-        x_neg_train = word_2_vecs(x_neg_train)
-        x_pos_test = word_2_vecs(x_pos_test)
-        x_neg_test = word_2_vecs(x_neg_test)
+        x_pos_train, y_pos_train = word_2_vecs(x_pos_train, y_pos_train)
+        x_neg_train, y_neg_train = word_2_vecs(x_neg_train, y_neg_train)
+        x_pos_test, y_pos_test = word_2_vecs(x_pos_test, y_pos_test)
+        x_neg_test, x_neg_test = word_2_vecs(x_neg_test, x_neg_test)
     else:
         x_pos_train = skip_thoughts_vecs(x_pos_train)
         x_neg_train = skip_thoughts_vecs(x_neg_train)
@@ -273,9 +342,9 @@ def load_stanford_imdb_dataset(vec_rep=WORD2VEC):
     np.savez(train_npz_path, x=x_train, y=y_train)
     np.savez(test_npz_path, x=x_test, y=y_test)
     print('saving standford imdb train dataset to %s' % train_npz_path)
-    print('saving standford imdb test dataset to %s' % train_npz_path)
+    print('saving standford imdb test dataset to %s' % test_npz_path)
 
-    return (x_train, y_train)
+    return (x_train, y_train), (x_test, y_test)
 
 
 def load_uci_dataset_from_file(filepath):
@@ -312,7 +381,7 @@ def load_uci_dataset(vec_rep=WORD2VEC):
     y = np.array(imdb[1] + yelp[1] + amzn[1])
 
     if vec_rep == WORD2VEC:
-        x = word_2_vecs(sentences)
+        x, y = word_2_vecs(sentences, y)
     else:
         x = skip_thoughts_vecs(sentences)
 
@@ -320,6 +389,78 @@ def load_uci_dataset(vec_rep=WORD2VEC):
     print('saved uci dataset to %s' % npz_path)
 
     return x, y
+
+def small_proj_dataset(vec_rep=WORD2VEC):
+    if vec_rep == WORD2VEC:
+        npz_path = W2V_SMALL_NPZ
+    else:
+        npz_path = SKP_SMALL_NPZ
+
+    if os.path.isfile(npz_path):
+        data = np.load(npz_path)
+        print('loaded small dataset from %s' % npz_path)
+        return data['x_train'], data['y_train'], data['x_test'], data['y_test']
+
+    x, y = load_uci_dataset()
+    x_train, x_test, y_train, y_test = train_test_split(x,
+                                                        y,
+                                                        test_size=0.33,
+                                                        random_state=42)
+
+    print('saved small to %s' % npz_path)
+    np.savez(npz_path, x_train=x_train, y_train=y_train, x_test=x_test,
+            y_test=y_test)
+
+    return x_train, y_train, x_test, y_test
+
+def proj_data(vec_rep=WORD2VEC):
+
+    if vec_rep == WORD2VEC:
+        npz_path = W2V_ALL_NPZ
+    else:
+        npz_path = SKP_ALL_NPZ
+
+    if os.path.isfile(npz_path):
+        data = np.load(npz_path)
+        print('loaded dataset from %s' % npz_path)
+        return (data['x_train'], data['y_train']), \
+                (data['x_valid'], data['y_valid']), \
+                (data['x_test'], data['y_test'])
+
+    uci_x, uci_y = load_uci_dataset()
+    train, test = load_stanford_imdb_dataset(vec_rep)
+
+    stanford_x_train = train[0]
+    stanford_y_train = train[1]
+    stanford_x_test = test[0]
+    stanford_y_test = test[1]
+
+    x, y = merge_datasets(uci_x, uci_y, stanford_x_train, stanford_y_train)
+    x, y = merge_datasets(x, y, stanford_x_test, stanford_y_test)
+
+
+    x_train, x_valid, y_train, y_valid = train_test_split(x,
+                                                        y,
+                                                        test_size=0.35,
+                                                        random_state=42)
+
+    x_valid, x_test, y_valid, y_test = train_test_split(x_valid,
+                                                        y_valid,
+                                                        test_size=0.45,
+                                                        random_state=42)
+
+    print('saved all to %s' % npz_path)
+    np.savez(npz_path,
+            x_train=x_train,
+            y_train=y_train,
+            x_valid=x_valid,
+            y_valid=y_valid,
+            x_test=x_test,
+            y_test=y_test)
+
+    return (x_train, y_train), \
+            (x_valid, y_valid), \
+            (x_test, y_test)
 
 if __name__ == '__main__':
     load_stanford_imdb_dataset(SKIPTHOUGHTS)
